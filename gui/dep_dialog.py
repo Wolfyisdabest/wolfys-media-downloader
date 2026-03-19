@@ -10,7 +10,7 @@ from typing import Dict
 
 import customtkinter as ctk
 
-from core.deps import check_all, install_dep, install_all_missing
+from core.deps import check_mandatory, check_all, install_dep, check_uv, check_python, IS_FROZEN
 
 
 class DepDialog(ctk.CTkToplevel):
@@ -30,7 +30,7 @@ class DepDialog(ctk.CTkToplevel):
         self.configure(fg_color=T["bg_dark"])
         self.grab_set()  # modal
 
-        self._status: Dict[str, bool] = check_all()
+        self._status: Dict[str, bool] = check_mandatory()
         self._build()
 
     def _build(self) -> None:
@@ -45,7 +45,7 @@ class DepDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             self,
-            text="Some required dependencies are missing or not detected.",
+            text="Some required components are missing. Click 'Fix All' to install them.",
             font=ctk.CTkFont(size=11),
             text_color=T["text_dim"],
         ).pack(pady=(0, 10))
@@ -61,7 +61,7 @@ class DepDialog(ctk.CTkToplevel):
 
         ctk.CTkButton(
             btn_row,
-            text="Install All Missing",
+            text="Fix All Missing",
             height=36,
             fg_color=T["accent_red"],
             hover_color=T["accent_hover"],
@@ -73,6 +73,7 @@ class DepDialog(ctk.CTkToplevel):
         ctk.CTkButton(
             btn_row,
             text="Skip",
+            width=80,
             height=36,
             fg_color="transparent",
             hover_color="#2a2a2a",
@@ -81,7 +82,7 @@ class DepDialog(ctk.CTkToplevel):
             text_color=T["text_dim"],
             font=ctk.CTkFont(size=12),
             command=self.destroy,
-        ).pack(side="right", width=80)
+        ).pack(side="right")
 
         # Log output
         ctk.CTkLabel(
@@ -108,42 +109,66 @@ class DepDialog(ctk.CTkToplevel):
             w.destroy()
         T = self.theme
 
-        DEP_LABELS = {
-            "yt-dlp": "yt-dlp  (YouTube downloader)",
-            "spotdl":  "SpotDL  (Spotify downloader)",
-            "ffmpeg":  "FFmpeg  (audio/video converter)",
-            "deno":    "Deno  (JS runtime — required by yt-dlp)",
+        # ── Mandatory ──────────────────────────────────────────────── #
+        ctk.CTkLabel(
+            self._rows_frame,
+            text="REQUIRED",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            text_color=T["text_dim"],
+        ).pack(anchor="w", padx=12, pady=(6, 2))
+
+        mandatory_labels = {
+            "yt-dlp": "yt-dlp  (bundled in exe — always available)" if IS_FROZEN
+                      else "yt-dlp  (YouTube downloader)",
+            "ffmpeg": "ffmpeg  (audio/video converter — auto-installed)",
         }
-
-        for name, ok in self._status.items():
+        for name, label in mandatory_labels.items():
+            ok = self._status.get(name, False)
             row = ctk.CTkFrame(self._rows_frame, fg_color="transparent")
-            row.pack(fill="x", padx=12, pady=5)
-
-            ctk.CTkLabel(
-                row, text="●",
-                font=ctk.CTkFont(size=13),
-                text_color=T["success"] if ok else T["error"],
-                width=20,
-            ).pack(side="left")
-
-            ctk.CTkLabel(
-                row,
-                text=DEP_LABELS.get(name, name),
-                font=ctk.CTkFont(size=12),
-                text_color=T["text_primary"] if not ok else T["text_dim"],
-                anchor="w",
-            ).pack(side="left", fill="x", expand=True)
-
+            row.pack(fill="x", padx=12, pady=4)
+            ctk.CTkLabel(row, text="●", font=ctk.CTkFont(size=13),
+                         text_color=T["success"] if ok else T["error"], width=20).pack(side="left")
+            ctk.CTkLabel(row, text=label, font=ctk.CTkFont(size=12),
+                         text_color=T["text_primary"] if not ok else T["text_dim"],
+                         anchor="w").pack(side="left", fill="x", expand=True)
             if not ok:
                 ctk.CTkButton(
-                    row,
-                    text="Install",
-                    width=70,
-                    height=26,
-                    fg_color=T["accent_red"],
-                    hover_color=T["accent_hover"],
-                    text_color="#FFFFFF",
-                    font=ctk.CTkFont(size=11),
+                    row, text="Fix", width=60, height=26,
+                    fg_color=T["accent_red"], hover_color=T["accent_hover"],
+                    text_color="#FFFFFF", font=ctk.CTkFont(size=11),
+                    command=lambda n=name: self._install_one(n),
+                ).pack(side="right")
+
+        # ── Optional ───────────────────────────────────────────────── #
+        sep = ctk.CTkFrame(self._rows_frame, fg_color="#2a2a2a", height=1)
+        sep.pack(fill="x", padx=12, pady=(8, 2))
+
+        ctk.CTkLabel(
+            self._rows_frame,
+            text="OPTIONAL  (installed automatically when needed)",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            text_color=T["text_dim"],
+        ).pack(anchor="w", padx=12, pady=(2, 2))
+
+        optional = [
+            ("spotdl", "SpotDL  (installed on first Spotify URL)"),
+            ("deno",   "Deno  (improves YouTube compatibility)"),
+        ]
+        all_status = check_all()
+        for name, label in optional:
+            ok = all_status.get(name, False)
+            row = ctk.CTkFrame(self._rows_frame, fg_color="transparent")
+            row.pack(fill="x", padx=12, pady=3)
+            ctk.CTkLabel(row, text="●", font=ctk.CTkFont(size=13),
+                         text_color=T["success"] if ok else T["amber"], width=20).pack(side="left")
+            ctk.CTkLabel(row, text=label, font=ctk.CTkFont(size=11),
+                         text_color=T["text_dim"], anchor="w").pack(side="left", fill="x", expand=True)
+            if not ok:
+                ctk.CTkButton(
+                    row, text="Install", width=65, height=22,
+                    fg_color="#2a2a2a", hover_color="#333333",
+                    border_color="#444444", border_width=1,
+                    text_color=T["text_dim"], font=ctk.CTkFont(size=10),
                     command=lambda n=name: self._install_one(n),
                 ).pack(side="right")
 

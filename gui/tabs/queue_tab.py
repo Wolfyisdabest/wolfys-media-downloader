@@ -101,7 +101,17 @@ class QueueRow:
         )
         self.cancel_btn.pack(side="right")
 
-    def update(self, status: Status, progress: float, filename: str) -> None:
+        # Error label — hidden until needed
+        self.error_label = ctk.CTkLabel(
+            self.frame,
+            text="",
+            font=ctk.CTkFont(size=10),
+            text_color=T["error"],
+            anchor="w",
+            wraplength=480,
+        )
+
+    def update(self, status: Status, progress: float, filename: str, error: str = "") -> None:
         color = STATUS_COLORS.get(status, "#777777")
         self.status_label.configure(
             text=STATUS_LABELS.get(status, "?"),
@@ -117,6 +127,13 @@ class QueueRow:
 
         if filename:
             self.file_label.configure(text=filename[:80])
+
+        # Show error message if present
+        if error and status == Status.FAILED:
+            self.error_label.configure(text=f"⚠  {error}")
+            self.error_label.pack(fill="x", padx=10, pady=(0, 6))
+        else:
+            self.error_label.pack_forget()
 
         # Hide cancel once terminal
         if status in (Status.DONE, Status.FAILED, Status.CANCELLED):
@@ -200,7 +217,7 @@ class QueueTab:
             self.rows[item_id] = row
             self._update_empty_state()
 
-        self.rows[item_id].update(status, progress, filename)
+        self.rows[item_id].update(status, progress, filename, item.error)
 
     def _clear_finished(self) -> None:
         q.clear_finished()

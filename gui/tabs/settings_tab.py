@@ -163,6 +163,31 @@ class SettingsTab:
             command=self._open_dep_installer,
         ).pack(anchor="w", pady=(6, 0))
 
+        # ── Developer Mode ─────────────────────────────────────────── #
+        self._section(outer, "Developer Mode")
+
+        dev_row = ctk.CTkFrame(outer, fg_color="transparent")
+        dev_row.pack(fill="x", pady=(2, 4))
+
+        self._dev_var = ctk.BooleanVar(value=config.get("dev_mode", False))
+        ctk.CTkSwitch(
+            dev_row,
+            text="Enable Developer Mode  (adds Dev tab with logs, raw commands, config dump)",
+            variable=self._dev_var,
+            font=ctk.CTkFont(size=12),
+            text_color=T["text_primary"],
+            progress_color=T["accent_red"],
+            button_color=T["accent_hover"],
+            command=self._toggle_dev_mode,
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            outer,
+            text="Restart required for tab to appear/disappear.",
+            font=ctk.CTkFont(size=10),
+            text_color=T["text_dim"],
+        ).pack(anchor="w", pady=(0, 8))
+
         # ── Config path ────────────────────────────────────────────── #
         self._section(outer, "Config File")
         ctk.CTkLabel(
@@ -212,6 +237,9 @@ class SettingsTab:
         # Find the root window
         root = self.dep_frame.winfo_toplevel()
         DepDialog(root, self.theme)
+
+    def _toggle_dev_mode(self) -> None:
+        config.set("dev_mode", self._dev_var.get())
 
     def _save_spotify_creds(self) -> None:
         client_id = self._spotify_client_id_entry.get().strip()

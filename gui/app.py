@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import ctypes
 import sys
+from pathlib import Path
 from typing import Optional
 
 import customtkinter as ctk
@@ -21,6 +22,19 @@ from gui.tabs.history_tab import HistoryTab
 from gui.tabs.settings_tab import SettingsTab
 
 logger = logging.getLogger("WMD")
+
+# Resolve logo path — works in dev (relative to gui/) and as PyInstaller exe
+def _get_asset_path(filename: str) -> Path:
+    """Returns the correct path to a bundled asset in both dev and exe modes."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller extracts bundled files to sys._MEIPASS
+        return Path(sys._MEIPASS) / filename  # type: ignore
+    else:
+        # Dev mode — logo sits next to main.py (one level up from gui/)
+        return Path(__file__).parent.parent / filename
+
+LOGO_PNG = _get_asset_path("Wolfysdownloaderlogo.png")
+LOGO_ICO = _get_asset_path("Wolfysdownloaderlogo.ico")
 
 
 # ------------------------------------------------------------------ #
@@ -66,6 +80,19 @@ class WolfyApp:
         self.root.configure(fg_color=THEME["bg_dark"])
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        # Apply window icon — try ICO first (best on Windows), fallback to PNG
+        try:
+            if LOGO_ICO.exists():
+                self.root.iconbitmap(str(LOGO_ICO))
+            elif LOGO_PNG.exists():
+                from PIL import Image, ImageTk  # type: ignore
+                img = Image.open(LOGO_PNG).resize((32, 32))
+                photo = ImageTk.PhotoImage(img)
+                self.root.iconphoto(True, photo)
+                self._icon_ref = photo  # prevent GC
+        except Exception:
+            pass  # Non-fatal — window just uses default icon
+
         self._build_header()
         self._build_tabs()
 
@@ -74,6 +101,9 @@ class WolfyApp:
 
         # First-run dependency check — runs after mainloop starts
         self.root.after(500, self._check_deps)
+        # Pre-fetch yt-dlp EJS solver script in background
+        import threading
+        threading.Thread(target=self._prefetch_components, daemon=True).start()
 
     # ------------------------------------------------------------------ #
     #  Layout                                                              #
@@ -89,13 +119,26 @@ class WolfyApp:
         header.pack(fill="x", side="top")
         header.pack_propagate(False)
 
+        # Logo image in header
+        try:
+            from PIL import Image
+            img = Image.open(LOGO_PNG).resize((36, 36), Image.LANCZOS)
+            self._header_logo = ctk.CTkImage(light_image=img, dark_image=img, size=(36, 36))
+            ctk.CTkLabel(
+                header,
+                image=self._header_logo,
+                text="",
+            ).pack(side="left", padx=(12, 4), pady=8)
+        except Exception:
+            pass
+
         title = ctk.CTkLabel(
             header,
-            text="🐺  Wolfy's Media Downloader",
+            text="Wolfy's Media Downloader",
             font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
             text_color=THEME["accent_hover"],
         )
-        title.pack(side="left", padx=18, pady=8)
+        title.pack(side="left", padx=(2, 6), pady=8)
 
         version = ctk.CTkLabel(
             header,
@@ -121,7 +164,11 @@ class WolfyApp:
         )
         tabview.pack(fill="both", expand=True, padx=10, pady=(6, 10))
 
-        for name in ("Download", "Queue", "History", "Settings"):
+        tab_names = ["Download", "Queue", "History", "Settings"]
+        if config.get("dev_mode", False):
+            tab_names.append("Dev")
+
+        for name in tab_names:
             tabview.add(name)
 
         tab_classes = {
@@ -130,6 +177,10 @@ class WolfyApp:
             "History":  HistoryTab,
             "Settings": SettingsTab,
         }
+
+        if config.get("dev_mode", False):
+            from gui.tabs.dev_tab import DevTab
+            tab_classes["Dev"] = DevTab
 
         self._tabs: dict = {}
         for name, cls in tab_classes.items():
@@ -141,8 +192,21 @@ class WolfyApp:
     #  Lifecycle                                                           #
     # ------------------------------------------------------------------ #
 
+    def _prefetch_components(self) -> None:
+        from core.deps import prefetch_remote_components
+        prefetch_remote_components()
+
     def _check_deps(self) -> None:
-        DepDialog.show_if_needed(self.root, THEME)
+        """
+        Auto-install ffmpeg silently. Only show dialog if it fails.
+        yt-dlp is bundled. spotdl is lazy. deno is optional.
+        """
+        from core.deps import ensure_ffmpeg, any_missing
+        # Try silent ffmpeg install first
+        ensure_ffmpeg(log=lambda m: logger.info(f"[setup] {m}"))
+        # Only pop dialog if something mandatory is still missing
+        if any_missing():
+            DepDialog.show_if_needed(self.root, THEME)
 
     def _on_close(self) -> None:
         config.set("window_geometry", self.root.geometry())
