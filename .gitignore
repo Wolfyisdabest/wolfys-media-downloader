@@ -1,9 +1,8 @@
-# Python cache garbage
+# Create .gitignore
+echo "dist/
+build/
 __pycache__/
+.venv/
 *.pyc
 *.pyo
-
-# Virtual env if it ever comes back
-.venv/
-
-# uv lock is debatable but fine to keep
+.python-version" > .gitignore
