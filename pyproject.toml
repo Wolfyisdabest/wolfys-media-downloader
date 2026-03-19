@@ -1,0 +1,16 @@
+[project]
+name = "wolfys-media-downloader"
+version = "2.0.0"
+description = "Wolfy's Media Downloader V2.0"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "curl-cffi>=0.14.0",
+    "pillow>=12.0.0",
+    "spotdl>=4.4.3",
+    "yt-dlp>=2025.12.8",
+    "customtkinter>=5.2.2",
+]
+
+[tool.uv.sources]
+yt-dlp = { git = "https://github.com/yt-dlp/yt-dlp.git", rev = "master" }

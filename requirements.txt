@@ -1,0 +1,14 @@
+# Wolfy's Media Downloader V2.0 — Requirements
+# Install with: pip install -r requirements.txt
+
+customtkinter>=5.2.0
+yt-dlp>=2024.12.1
+spotdl>=4.2.0
+pillow>=10.0.0
+
+# FFmpeg is required but not pip-installable.
+# Windows: https://ffmpeg.org/download.html  (add to PATH)
+# Or via winget: winget install ffmpeg
+
+# Build to exe (optional)
+pyinstaller>=6.0.0
