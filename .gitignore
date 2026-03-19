@@ -1,10 +1,9 @@
-# Python-generated files
+# Python cache garbage
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.pyc
+*.pyo
 
-# Virtual environments
-.venv
+# Virtual env if it ever comes back
+.venv/
+
+# uv lock is debatable but fine to keep
