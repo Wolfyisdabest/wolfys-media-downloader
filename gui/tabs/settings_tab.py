@@ -4,8 +4,6 @@ App settings — theme, default dest, format, ffmpeg check, dep status.
 """
 
 from __future__ import annotations
-import subprocess
-import sys
 from pathlib import Path
 from tkinter import filedialog
 import tkinter as tk
@@ -14,7 +12,8 @@ from typing import Dict
 import customtkinter as ctk
 
 from core.config import config
-from core.deps import check_ytdlp, check_spotdl, check_ffmpeg, check_deno
+from core.deps import check_all
+from core.version import APP_VERSION
 
 
 class SettingsTab:
@@ -163,6 +162,56 @@ class SettingsTab:
             command=self._open_dep_installer,
         ).pack(anchor="w", pady=(6, 0))
 
+        # ── Updates ───────────────────────────────────────────────── #
+        self._section(outer, "Updates")
+
+        update_row = ctk.CTkFrame(outer, fg_color="transparent")
+        update_row.pack(fill="x", pady=(2, 4))
+
+        ctk.CTkLabel(
+            update_row,
+            text=f"Current Version  v{APP_VERSION}",
+            font=ctk.CTkFont(size=12),
+            text_color=T["text_primary"],
+            width=160,
+            anchor="w",
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            update_row,
+            text="Check for updates",
+            width=130,
+            height=32,
+            fg_color=T["bg_mid"],
+            hover_color="#2a2a2a",
+            border_color="#444444",
+            border_width=1,
+            text_color=T["text_primary"],
+            font=ctk.CTkFont(size=11),
+            command=self._check_updates,
+        ).pack(side="left", padx=(0, 6))
+
+        self._updates_var = ctk.BooleanVar(value=config.get("check_updates_on_startup", True))
+        ctk.CTkSwitch(
+            outer,
+            text="Check for updates on startup",
+            variable=self._updates_var,
+            font=ctk.CTkFont(size=12),
+            text_color=T["text_primary"],
+            progress_color=T["accent_red"],
+            button_color=T["accent_hover"],
+            command=lambda: config.set("check_updates_on_startup", self._updates_var.get()),
+        ).pack(anchor="w", pady=(0, 4))
+
+        self._update_feedback = ctk.CTkLabel(
+            outer,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color=T["text_dim"],
+            anchor="w",
+        )
+        self._update_feedback.pack(fill="x")
+
         # ── Developer Mode ─────────────────────────────────────────── #
         self._section(outer, "Developer Mode")
 
@@ -213,11 +262,12 @@ class SettingsTab:
             w.destroy()
         T = self.theme
 
+        status = check_all()
         deps = [
-            ("yt-dlp",  check_ytdlp(),  "pip install yt-dlp"),
-            ("SpotDL",  check_spotdl(), "pip install spotdl"),
-            ("FFmpeg",  check_ffmpeg(), "https://ffmpeg.org/download.html"),
-            ("Deno",    check_deno(),   "https://deno.com  (JS runtime for yt-dlp)"),
+            ("yt-dlp",  status["yt-dlp"], "pip install yt-dlp"),
+            ("SpotDL",  status["spotdl"], "pip install spotdl"),
+            ("FFmpeg",  status["ffmpeg"], "https://ffmpeg.org/download.html"),
+            ("Deno",    status["deno"],   "https://deno.com  (JS runtime for yt-dlp)"),
         ]
         for name, ok, fix in deps:
             row = ctk.CTkFrame(self.dep_frame, fg_color="transparent")
@@ -237,6 +287,47 @@ class SettingsTab:
         # Find the root window
         root = self.dep_frame.winfo_toplevel()
         DepDialog(root, self.theme)
+
+    def _check_updates(self) -> None:
+        import threading
+        from gui.update_dialog import UpdateDialog
+        from core.updater import check_for_update
+
+        self._update_feedback.configure(text="Checking GitHub Releases...", text_color=self.theme["text_dim"])
+
+        def worker() -> None:
+            try:
+                update = check_for_update()
+                if update:
+                    self._update_feedback.after(
+                        0,
+                        lambda: (
+                            self._update_feedback.configure(
+                                text=f"New version available: v{update.version}",
+                                text_color=self.theme["amber"],
+                            ),
+                            UpdateDialog(self._update_feedback.winfo_toplevel(), self.theme, update),
+                        ),
+                    )
+                else:
+                    self._update_feedback.after(
+                        0,
+                        lambda: self._update_feedback.configure(
+                            text="You are on the latest version.",
+                            text_color=self.theme["success"],
+                        ),
+                    )
+            except Exception as e:
+                message = str(e)
+                self._update_feedback.after(
+                    0,
+                    lambda: self._update_feedback.configure(
+                        text=f"Update check failed: {message}",
+                        text_color=self.theme["error"],
+                    ),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _toggle_dev_mode(self) -> None:
         config.set("dev_mode", self._dev_var.get())

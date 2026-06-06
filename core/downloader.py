@@ -8,12 +8,30 @@ from __future__ import annotations
 import sys
 import subprocess
 import logging
+import platform
 from pathlib import Path
 from typing import Callable, Literal, Optional
+
+from core.paths import CACHE_DIR
 
 logger = logging.getLogger("WMD")
 
 FormatType = Literal["mp3", "flac", "mp4", "mkv"]
+
+_WINDOWS_NO_WINDOW = (
+    subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+)
+
+
+def _subprocess_kwargs() -> dict:
+    if platform.system() != "Windows":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return {
+        "creationflags": _WINDOWS_NO_WINDOW,
+        "startupinfo": startupinfo,
+    }
 
 # Re-export check functions from deps so existing callers don't break
 from core.config import config
@@ -128,6 +146,7 @@ def _build_ydl_opts(
         "overwrites": overwrite,
         "progress_hooks": [make_progress_hook(on_progress)],
         "postprocessors": [],
+        "cachedir": str(CACHE_DIR / "yt-dlp"),
         "extractor_args": {"youtube": {"player_client": ["web", "ios", "mweb"]}},
         "http_headers": {
             "User-Agent": (
@@ -136,6 +155,11 @@ def _build_ydl_opts(
             )
         },
     }
+
+    from core.deps import get_ffmpeg_path
+    ffmpeg_path = get_ffmpeg_path()
+    if ffmpeg_path:
+        opts["ffmpeg_location"] = str(Path(ffmpeg_path).parent)
 
     if po_token and po_token.strip():
         opts["extractor_args"]["youtube"]["po_token"] = po_token.strip()
@@ -213,8 +237,14 @@ def _download_ytdlp_subprocess(
         "--ignore-errors",
         "--write-thumbnail",
         "--add-metadata",
+        "--cache-dir", str(CACHE_DIR / "yt-dlp"),
         "--extractor-args", "youtube:player_client=web,ios,mweb",
     ]
+
+    from core.deps import get_ffmpeg_path
+    ffmpeg_path = get_ffmpeg_path()
+    if ffmpeg_path:
+        args += ["--ffmpeg-location", str(Path(ffmpeg_path).parent)]
 
     deno = get_deno_path()
     if check_deno() and deno:
@@ -239,7 +269,13 @@ def _download_ytdlp_subprocess(
         if on_progress:
             on_progress(0.0, "Starting...")
 
-        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            **_subprocess_kwargs(),
+        )
         for line in proc.stdout:  # type: ignore
             line = line.rstrip()
             logger.debug(f"[yt-dlp] {line}")
@@ -251,11 +287,12 @@ def _download_ytdlp_subprocess(
                 except Exception:
                     pass
         proc.wait()
+        success = proc.returncode == 0
 
-        if on_progress:
+        if success and on_progress:
             on_progress(100.0, "Done")
 
-        return proc.returncode == 0
+        return success
     except Exception as e:
         logger.error(f"yt-dlp subprocess failed: {e}")
         return False
@@ -326,7 +363,12 @@ def download_spotify(
         "download", url,
         "--output", output_template,
         "--format", "mp3",
+        "--cache-path", str(CACHE_DIR / "spotdl"),
     ]
+    from core.deps import get_ffmpeg_path
+    ffmpeg_path = get_ffmpeg_path()
+    if ffmpeg_path:
+        cmd.extend(["--ffmpeg", str(ffmpeg_path)])
     if overwrite:
         cmd.extend(["--overwrite", "force"])
     else:
@@ -344,6 +386,7 @@ def download_spotify(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            **_subprocess_kwargs(),
         )
 
         output_lines: list[str] = []
@@ -406,9 +449,6 @@ def download(
         return False
 
     if is_spotify_url(url):
-        if not check_spotdl():
-            logger.error("SpotDL not found. Install: pip install spotdl")
-            return False
         return download_spotify(url, dest, overwrite, on_progress)
     else:
         if not check_ytdlp():

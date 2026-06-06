@@ -10,7 +10,7 @@ from typing import Dict
 
 import customtkinter as ctk
 
-from core.deps import check_mandatory, check_all, install_dep, check_uv, check_python, IS_FROZEN
+from core.deps import check_mandatory, check_all, install_dep, IS_FROZEN
 
 
 class DepDialog(ctk.CTkToplevel):
@@ -19,9 +19,10 @@ class DepDialog(ctk.CTkToplevel):
     Call DepDialog.show_if_needed(parent, theme) to only show when something is missing.
     """
 
-    def __init__(self, parent, theme: Dict[str, str]) -> None:
+    def __init__(self, parent, theme: Dict[str, str], include_optional: bool = True) -> None:
         super().__init__(parent)
         self.theme = theme
+        self.include_optional = include_optional
         T = theme
 
         self.title("🐺 Dependency Check")
@@ -30,7 +31,7 @@ class DepDialog(ctk.CTkToplevel):
         self.configure(fg_color=T["bg_dark"])
         self.grab_set()  # modal
 
-        self._status: Dict[str, bool] = check_mandatory()
+        self._status: Dict[str, bool] = check_all() if include_optional else check_mandatory()
         self._build()
 
     def _build(self) -> None:
@@ -45,7 +46,7 @@ class DepDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             self,
-            text="Some required components are missing. Click 'Fix All' to install them.",
+            text="Some components are missing. Click 'Fix All' to install them.",
             font=ctk.CTkFont(size=11),
             text_color=T["text_dim"],
         ).pack(pady=(0, 10))
@@ -199,7 +200,7 @@ class DepDialog(ctk.CTkToplevel):
         for name in names:
             install_dep(name, log=self._log_write)
         # Recheck and refresh rows
-        self._status = check_all()
+        self._status = check_all() if self.include_optional else check_mandatory()
         self.after(0, self._render_rows)
 
     # ------------------------------------------------------------------ #
@@ -210,4 +211,4 @@ class DepDialog(ctk.CTkToplevel):
     def show_if_needed(cls, parent, theme: Dict[str, str]) -> None:
         from core.deps import any_missing
         if any_missing():
-            cls(parent, theme)
+            cls(parent, theme, include_optional=False)

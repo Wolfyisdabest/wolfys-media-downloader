@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "curl-cffi>=0.14.0",
     "pillow>=12.0.0",
-    "spotdl",
-    "yt-dlp",
+    "spotdl>=4.2.0",
+    "yt-dlp>=2024.12.1",
     "customtkinter>=5.2.2",
 ]

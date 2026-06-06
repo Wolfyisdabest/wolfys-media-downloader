@@ -11,6 +11,14 @@ import sys
 import argparse
 
 
+def run_internal_spotdl() -> None:
+    """Run SpotDL from the bundled Python package for frozen exe subprocesses."""
+    from spotdl import console_entry_point
+
+    sys.argv = ["spotdl", *sys.argv[2:]]
+    console_entry_point()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Wolfy's Media Downloader V2.0",
@@ -28,6 +36,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--internal-spotdl":
+        run_internal_spotdl()
+        return
+
     args = parse_args()
 
     if args.cli:

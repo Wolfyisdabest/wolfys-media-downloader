@@ -5,9 +5,11 @@ Configuration manager — loads, saves, and validates user settings.
 
 from __future__ import annotations
 import json
-import os
+import threading
 from pathlib import Path
 from typing import Any, Dict
+
+from core.paths import CONFIG_DIR
 
 
 DEFAULTS: Dict[str, Any] = {
@@ -18,18 +20,21 @@ DEFAULTS: Dict[str, Any] = {
     "show_debug_log": True,
     "po_token": "",
     "window_geometry": "720x600",
+    "check_updates_on_startup": True,
+    "skipped_update_version": "",
     "history": [],          # List of completed download records
 }
 
 
 class Config:
-    """Persistent config stored at %APPDATA%/WolfysMediaDownloader/config.json"""
+    """Persistent portable config stored at ./Data/config/config.json"""
 
-    CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "WolfysMediaDownloader"
+    CONFIG_DIR = CONFIG_DIR
     CONFIG_FILE = CONFIG_DIR / "config.json"
 
     def __init__(self) -> None:
         self.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
         self._data: Dict[str, Any] = self._load()
 
     # ------------------------------------------------------------------ #
@@ -48,8 +53,9 @@ class Config:
 
     def _save(self) -> None:
         try:
-            with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, indent=2, ensure_ascii=False)
+            with self._lock:
+                with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(self._data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"[Config] Save failed: {e}")
 
@@ -58,21 +64,25 @@ class Config:
     # ------------------------------------------------------------------ #
 
     def get(self, key: str, default: Any = None) -> Any:
-        return self._data.get(key, default)
+        with self._lock:
+            return self._data.get(key, default)
 
     def set(self, key: str, value: Any) -> None:
-        self._data[key] = value
+        with self._lock:
+            self._data[key] = value
         self._save()
 
     def add_history(self, record: Dict[str, Any]) -> None:
         """Append a download record. Keeps latest 100 entries."""
-        history: list = self._data.get("history", [])
-        history.insert(0, record)
-        self._data["history"] = history[:100]
+        with self._lock:
+            history: list = list(self._data.get("history", []))
+            history.insert(0, record)
+            self._data["history"] = history[:100]
         self._save()
 
     def clear_history(self) -> None:
-        self._data["history"] = []
+        with self._lock:
+            self._data["history"] = []
         self._save()
 
     @property

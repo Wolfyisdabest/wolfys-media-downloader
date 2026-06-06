@@ -8,20 +8,34 @@ from __future__ import annotations
 import logging
 import ctypes
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
 import customtkinter as ctk
 
 from core.config import config
+from core.paths import LOGS_DIR
+from core.version import APP_VERSION
 from core.queue_manager import queue
 from gui.dep_dialog import DepDialog
 from gui.tabs.download_tab import DownloadTab
 from gui.tabs.queue_tab import QueueTab
 from gui.tabs.history_tab import HistoryTab
 from gui.tabs.settings_tab import SettingsTab
+from gui.update_dialog import UpdateDialog
 
 logger = logging.getLogger("WMD")
+
+
+def configure_logging() -> None:
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    logger.setLevel(logging.INFO)
+    if any(isinstance(h, logging.FileHandler) for h in logger.handlers):
+        return
+    handler = logging.FileHandler(LOGS_DIR / "app.log", encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(handler)
 
 # Resolve logo path — works in dev (relative to gui/) and as PyInstaller exe
 def _get_asset_path(filename: str) -> Path:
@@ -62,6 +76,7 @@ def apply_theme() -> None:
 
 class WolfyApp:
     def __init__(self) -> None:
+        configure_logging()
         apply_theme()
 
         # Hide console window when running as frozen exe
@@ -74,7 +89,7 @@ class WolfyApp:
                 pass
 
         self.root = ctk.CTk()
-        self.root.title("🐺 Wolfy's Media Downloader  V2.0")
+        self.root.title(f"🐺 Wolfy's Media Downloader  V{APP_VERSION}")
         self.root.geometry(config.get("window_geometry", "760x620"))
         self.root.minsize(680, 520)
         self.root.configure(fg_color=THEME["bg_dark"])
@@ -99,11 +114,10 @@ class WolfyApp:
         # Wire queue updates to queue tab
         queue.set_callback(self._tabs["queue"].on_queue_update)
 
-        # First-run dependency check — runs after mainloop starts
-        self.root.after(500, self._check_deps)
-        # Pre-fetch yt-dlp EJS solver script in background
-        import threading
-        threading.Thread(target=self._prefetch_components, daemon=True).start()
+        # Run dependency detection after the window is visible.
+        self.root.after(800, self._check_deps_async)
+        if config.get("check_updates_on_startup", True):
+            self.root.after(1400, self._check_updates_async)
 
     # ------------------------------------------------------------------ #
     #  Layout                                                              #
@@ -142,7 +156,7 @@ class WolfyApp:
 
         version = ctk.CTkLabel(
             header,
-            text="V2.0",
+            text=f"V{APP_VERSION}",
             font=ctk.CTkFont(family="Segoe UI", size=11),
             text_color=THEME["text_dim"],
         )
@@ -192,21 +206,35 @@ class WolfyApp:
     #  Lifecycle                                                           #
     # ------------------------------------------------------------------ #
 
-    def _prefetch_components(self) -> None:
-        from core.deps import prefetch_remote_components
-        prefetch_remote_components()
+    def _check_deps_async(self) -> None:
+        threading.Thread(target=self._check_deps, daemon=True).start()
 
     def _check_deps(self) -> None:
         """
-        Auto-install ffmpeg silently. Only show dialog if it fails.
+        Detect mandatory dependencies without blocking startup.
         yt-dlp is bundled. spotdl is lazy. deno is optional.
         """
-        from core.deps import ensure_ffmpeg, any_missing
-        # Try silent ffmpeg install first
-        ensure_ffmpeg(log=lambda m: logger.info(f"[setup] {m}"))
-        # Only pop dialog if something mandatory is still missing
+        from core.deps import any_missing
         if any_missing():
-            DepDialog.show_if_needed(self.root, THEME)
+            self.root.after(0, lambda: DepDialog.show_if_needed(self.root, THEME))
+
+    def _check_updates_async(self) -> None:
+        threading.Thread(target=self._check_updates, daemon=True).start()
+
+    def _check_updates(self) -> None:
+        from core.updater import check_for_update, log_update
+
+        try:
+            update = check_for_update()
+        except Exception as e:
+            log_update(str(e))
+            return
+
+        if not update:
+            return
+        if config.get("skipped_update_version", "") == update.version:
+            return
+        self.root.after(0, lambda: UpdateDialog(self.root, THEME, update))
 
     def _on_close(self) -> None:
         config.set("window_geometry", self.root.geometry())

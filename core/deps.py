@@ -23,6 +23,32 @@ from typing import Callable, Optional
 logger = logging.getLogger("WMD")
 
 IS_FROZEN = getattr(sys, "frozen", False)
+_WINDOWS_NO_WINDOW = (
+    subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+)
+
+
+def _subprocess_kwargs() -> dict:
+    if platform.system() != "Windows":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return {
+        "creationflags": _WINDOWS_NO_WINDOW,
+        "startupinfo": startupinfo,
+    }
+
+
+def _app_dirs() -> list[Path]:
+    dirs: list[Path] = []
+    if IS_FROZEN:
+        dirs.append(Path(sys.executable).resolve().parent)
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            dirs.append(Path(meipass))
+    dirs.append(Path(__file__).resolve().parent.parent)
+    dirs.append(Path.cwd())
+    return list(dict.fromkeys(dirs))
 
 
 # ------------------------------------------------------------------ #
@@ -38,7 +64,12 @@ def _real_python() -> Optional[str]:
         found = shutil.which(name)
         if found:
             try:
-                if subprocess.run([found, "--version"], capture_output=True, timeout=5).returncode == 0:
+                if subprocess.run(
+                    [found, "--version"],
+                    capture_output=True,
+                    timeout=5,
+                    **_subprocess_kwargs(),
+                ).returncode == 0:
                     return found
             except Exception:
                 pass
@@ -48,7 +79,12 @@ def _real_python() -> Optional[str]:
         candidate = p / "python.exe"
         if candidate.exists():
             try:
-                if subprocess.run([str(candidate), "--version"], capture_output=True, timeout=5).returncode == 0:
+                if subprocess.run(
+                    [str(candidate), "--version"],
+                    capture_output=True,
+                    timeout=5,
+                    **_subprocess_kwargs(),
+                ).returncode == 0:
                     return str(candidate)
             except Exception:
                 pass
@@ -61,38 +97,94 @@ def _real_python() -> Optional[str]:
 
 def _tool_dirs() -> list[Path]:
     home = Path.home()
-    dirs = [home / ".local" / "bin"]
+    dirs = []
+    for base in _app_dirs():
+        dirs.extend([
+            base,
+            base / "tools",
+            base / "_internal" / "tools",
+        ])
+
+    dirs += [
+        home / ".local" / "bin",
+        home / ".cargo" / "bin",
+    ]
     if platform.system() == "Windows":
         appdata = Path(os.environ.get("APPDATA", ""))
         localappdata = Path(os.environ.get("LOCALAPPDATA", ""))
+        programdata = Path(os.environ.get("PROGRAMDATA", ""))
         dirs += [
             appdata / "uv" / "bin",
             appdata / "Python" / "Scripts",
+            localappdata / "uv" / "bin",
+            localappdata / "Microsoft" / "WinGet" / "Packages",
             localappdata / "Programs" / "Python" / "Scripts",
+            localappdata / "Programs" / "Python" / "Launcher",
+            localappdata / "Programs" / "Microsoft VS Code" / "bin",
+            home / "scoop" / "shims",
+            programdata / "scoop" / "shims",
+            programdata / "chocolatey" / "bin",
         ]
+        for p in sorted((appdata / "Python").glob("Python3*"), reverse=True):
+            dirs.append(p / "Scripts")
         for p in sorted((localappdata / "Programs" / "Python").glob("Python3*"), reverse=True):
             dirs.append(p / "Scripts")
     else:
-        dirs += [Path("/usr/local/bin"), Path("/usr/bin")]
+        dirs += [Path("/opt/homebrew/bin"), Path("/usr/local/bin"), Path("/usr/bin")]
     return [d for d in dirs if d.exists()]
 
 
 def _find_tool(name: str) -> Optional[str]:
-    found = shutil.which(name)
-    if found:
-        return found
     exe = f"{name}.exe" if platform.system() == "Windows" else name
     for d in _tool_dirs():
         c = d / exe
         if c.exists():
             return str(c)
+    found = shutil.which(name)
+    if found:
+        return found
     return None
 
 
 def _run_ok(args: list[str], timeout: int = 8) -> bool:
     try:
-        return subprocess.run(args, capture_output=True, timeout=timeout).returncode == 0
+        return subprocess.run(
+            args,
+            capture_output=True,
+            timeout=timeout,
+            **_subprocess_kwargs(),
+        ).returncode == 0
     except Exception:
+        return False
+
+
+def _run_install_command(
+    args: list[str],
+    log: Optional[Callable[[str], None]] = None,
+    timeout: Optional[int] = None,
+) -> bool:
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            **_subprocess_kwargs(),
+        )
+        try:
+            for line in proc.stdout:  # type: ignore
+                if log:
+                    log(line.rstrip())
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            if log:
+                log("✗ Install command timed out.")
+            return False
+        return proc.returncode == 0
+    except Exception as e:
+        if log:
+            log(f"✗ {e}")
         return False
 
 
@@ -120,6 +212,8 @@ def check_ffmpeg() -> bool:
 
 
 def check_spotdl() -> bool:
+    if IS_FROZEN:
+        return True
     tool = _find_tool("spotdl")
     if tool and _run_ok([tool, "--version"], timeout=15):
         return True
@@ -133,7 +227,8 @@ def check_deno() -> bool:
 
 
 def check_uv() -> bool:
-    return _find_tool("uv") is not None
+    tool = _find_tool("uv")
+    return bool(tool and _run_ok([tool, "--version"]))
 
 
 def check_python() -> bool:
@@ -181,20 +276,22 @@ def get_ytdlp_cmd() -> list[str]:
     if IS_FROZEN:
         return ["__api__"]
     tool = _find_tool("yt-dlp")
-    if tool:
+    if tool and _run_ok([tool, "--version"]):
         return [tool]
     py = _real_python()
-    if py:
+    if py and _run_ok([py, "-m", "yt_dlp", "--version"]):
         return [py, "-m", "yt_dlp"]
     raise RuntimeError("yt-dlp not found.")
 
 
 def get_spotdl_cmd() -> list[str]:
+    if IS_FROZEN:
+        return [sys.executable, "--internal-spotdl"]
     tool = _find_tool("spotdl")
-    if tool:
+    if tool and _run_ok([tool, "--version"], timeout=15):
         return [tool]
     py = _real_python()
-    if py:
+    if py and _run_ok([py, "-m", "spotdl", "--version"], timeout=15):
         return [py, "-m", "spotdl"]
     raise RuntimeError("spotdl not found.")
 
@@ -224,29 +321,47 @@ def ensure_ffmpeg(log: Optional[Callable[[str], None]] = None) -> bool:
             log("ffmpeg missing. Install: https://ffmpeg.org/download.html")
         return False
 
+    winget = _find_tool("winget")
+    if not winget or not _run_ok([winget, "--version"]):
+        if log:
+            log("✗ winget was not found. Install ffmpeg manually: winget install Gyan.FFmpeg")
+        return False
+
     if log:
         log("Installing ffmpeg automatically via winget (one time only)...")
 
-    try:
-        proc = subprocess.Popen(
-            ["winget", "install", "--id", "Gyan.FFmpeg", "-e",
-             "--accept-source-agreements", "--accept-package-agreements", "--silent"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        )
-        for line in proc.stdout:  # type: ignore
-            if log:
-                log(line.rstrip())
-        proc.wait()
-        _refresh_path()
-        ok = check_ffmpeg()
-        if log:
-            log("✓ ffmpeg ready." if ok else "✗ ffmpeg may need a restart to be detected.")
-        return ok
-    except Exception as e:
-        if log:
-            log(f"✗ ffmpeg auto-install failed: {e}")
+    installed = _run_install_command([
+        winget, "install", "--id", "Gyan.FFmpeg", "-e",
+        "--accept-source-agreements", "--accept-package-agreements", "--silent",
+    ], log)
+    _refresh_path()
+    ok = check_ffmpeg()
+    if log:
+        if ok:
+            log("✓ ffmpeg ready.")
+        elif installed:
+            log("✗ ffmpeg installed but was not detected. Restart the app or add ffmpeg to PATH.")
+        else:
+            log("✗ ffmpeg auto-install failed.")
             log("  Manual: winget install Gyan.FFmpeg")
+    return ok
+
+
+def ensure_ytdlp(log: Optional[Callable[[str], None]] = None) -> bool:
+    """Install yt-dlp when running from source and it is missing."""
+    if check_ytdlp():
+        return True
+    if IS_FROZEN:
+        if log:
+            log("✗ yt-dlp is missing from the bundled app.")
         return False
+    if check_uv():
+        ok = _uv_tool_install("yt-dlp", log)
+    else:
+        ok = _pip_install("yt-dlp", _real_python(), log)
+    if ok:
+        _refresh_path()
+    return check_ytdlp()
 
 
 def _refresh_path() -> None:
@@ -256,11 +371,12 @@ def _refresh_path() -> None:
         r = subprocess.run(
             ["powershell", "-Command",
              "[System.Environment]::GetEnvironmentVariable('PATH','Machine') + ';' + "
-             "[System.Environment]::GetEnvironmentVariable('PATH','User')"],
-            capture_output=True, text=True, timeout=5
+            "[System.Environment]::GetEnvironmentVariable('PATH','User')"],
+            capture_output=True, text=True, timeout=5, **_subprocess_kwargs()
         )
         if r.returncode == 0 and r.stdout.strip():
-            os.environ["PATH"] = r.stdout.strip()
+            path_parts = [r.stdout.strip(), *[str(d) for d in _tool_dirs()]]
+            os.environ["PATH"] = ";".join(dict.fromkeys(path_parts))
     except Exception:
         pass
 
@@ -297,11 +413,7 @@ def ensure_spotdl(log: Optional[Callable[[str], None]] = None) -> bool:
 
 def install_dep(name: str, log: Optional[Callable[[str], None]] = None) -> bool:
     if name == "yt-dlp":
-        if IS_FROZEN:
-            if log:
-                log("yt-dlp is bundled inside the exe — no install needed.")
-            return True
-        return _uv_tool_install("yt-dlp", log) if check_uv() else _pip_install("yt-dlp", _real_python(), log)
+        return ensure_ytdlp(log)
     elif name == "ffmpeg":
         return ensure_ffmpeg(log)
     elif name == "spotdl":
@@ -331,7 +443,7 @@ def prefetch_remote_components() -> None:
                    "--js-runtimes", f"deno:{deno}",
                    "--simulate", "--quiet",
                    "https://www.youtube.com/watch?v=dQw4w9WgXcQ"],
-            capture_output=True, timeout=30
+            capture_output=True, timeout=30, **_subprocess_kwargs()
         )
     except Exception:
         pass
@@ -342,25 +454,18 @@ def prefetch_remote_components() -> None:
 # ------------------------------------------------------------------ #
 
 def _uv_tool_install(package: str, log: Optional[Callable[[str], None]] = None) -> bool:
+    uv = _find_tool("uv")
+    if not uv or not _run_ok([uv, "--version"]):
+        if log:
+            log("✗ uv was not found.")
+        return False
     if log:
         log(f"Installing {package} via uv...")
-    try:
-        proc = subprocess.Popen(
-            ["uv", "tool", "install", package, "--upgrade"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        )
-        for line in proc.stdout:  # type: ignore
-            if log:
-                log(line.rstrip())
-        proc.wait()
-        ok = proc.returncode == 0
-        if log:
-            log(f"{'✓' if ok else '✗'} {package} {'installed.' if ok else 'failed.'}")
-        return ok
-    except Exception as e:
-        if log:
-            log(f"✗ {e}")
-        return False
+    ok = _run_install_command([uv, "tool", "install", package, "--upgrade"], log)
+    _refresh_path()
+    if log:
+        log(f"{'✓' if ok else '✗'} {package} {'installed.' if ok else 'failed.'}")
+    return ok
 
 
 def _pip_install(package: str, py: Optional[str], log: Optional[Callable[[str], None]] = None) -> bool:
@@ -370,23 +475,11 @@ def _pip_install(package: str, py: Optional[str], log: Optional[Callable[[str], 
         return False
     if log:
         log(f"Installing {package} via pip...")
-    try:
-        proc = subprocess.Popen(
-            [py, "-m", "pip", "install", "-U", "--user", package],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        )
-        for line in proc.stdout:  # type: ignore
-            if log:
-                log(line.rstrip())
-        proc.wait()
-        ok = proc.returncode == 0
-        if log:
-            log(f"{'✓' if ok else '✗'} {package} {'installed.' if ok else 'failed.'}")
-        return ok
-    except Exception as e:
-        if log:
-            log(f"✗ {e}")
-        return False
+    ok = _run_install_command([py, "-m", "pip", "install", "-U", "--user", package], log)
+    _refresh_path()
+    if log:
+        log(f"{'✓' if ok else '✗'} {package} {'installed.' if ok else 'failed.'}")
+    return ok
 
 
 def _install_deno(log: Optional[Callable[[str], None]] = None) -> bool:
@@ -397,15 +490,27 @@ def _install_deno(log: Optional[Callable[[str], None]] = None) -> bool:
             cmd = ["powershell", "-Command", "irm https://deno.land/install.ps1 | iex"]
         else:
             cmd = ["sh", "-c", "curl -fsSL https://deno.land/install.sh | sh"]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            **_subprocess_kwargs(),
+        )
         for line in proc.stdout:  # type: ignore
             if log:
                 log(line.rstrip())
         proc.wait()
         ok = proc.returncode == 0
+        _refresh_path()
         if log:
-            log("✓ Deno installed. Restart app." if ok else "✗ Failed. Try: https://deno.com")
-        return ok
+            if ok and check_deno():
+                log("✓ Deno installed.")
+            elif ok:
+                log("✓ Deno installed. Restart app if it is not detected yet.")
+            else:
+                log("✗ Failed. Try: https://deno.com")
+        return check_deno() if ok else False
     except Exception as e:
         if log:
             log(f"✗ {e}")
@@ -420,15 +525,27 @@ def _install_uv(log: Optional[Callable[[str], None]] = None) -> bool:
             cmd = ["powershell", "-Command", "irm https://astral.sh/uv/install.ps1 | iex"]
         else:
             cmd = ["sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            **_subprocess_kwargs(),
+        )
         for line in proc.stdout:  # type: ignore
             if log:
                 log(line.rstrip())
         proc.wait()
         ok = proc.returncode == 0
+        _refresh_path()
         if log:
-            log("✓ uv installed." if ok else "✗ Failed. Try: https://docs.astral.sh/uv/")
-        return ok
+            if ok and check_uv():
+                log("✓ uv installed.")
+            elif ok:
+                log("✓ uv installed. Restart app if it is not detected yet.")
+            else:
+                log("✗ Failed. Try: https://docs.astral.sh/uv/")
+        return check_uv() if ok else False
     except Exception as e:
         if log:
             log(f"✗ {e}")

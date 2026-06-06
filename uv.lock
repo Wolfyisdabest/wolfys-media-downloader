@@ -817,8 +817,8 @@ requires-dist = [
     { name = "curl-cffi", specifier = ">=0.14.0" },
     { name = "customtkinter", specifier = ">=5.2.2" },
     { name = "pillow", specifier = ">=12.0.0" },
-    { name = "spotdl" },
-    { name = "yt-dlp" },
+    { name = "spotdl", specifier = ">=4.2.0" },
+    { name = "yt-dlp", specifier = ">=2024.12.1" },
 ]
 
 [[package]]

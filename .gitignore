@@ -1,8 +1,11 @@
-# Create .gitignore
-echo "dist/
+dist/
+dist_verify/
 build/
+build_verify/
 __pycache__/
 .venv/
+.vs/
+Data/
+tools/*.exe
 *.pyc
 *.pyo
-.python-version" > .gitignore
